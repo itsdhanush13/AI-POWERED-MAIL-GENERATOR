@@ -107,11 +107,11 @@ def create_streamlit_app(llm, clean_text):
 
                 subject_encoded = urllib.parse.quote(subject)
                 body_encoded = urllib.parse.quote(gmail_body)
-                gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={urllib.parse.quote(recipient_email or '')}&su={subject_encoded}&body={body_encoded}"
+                mailto_url = f"mailto:{urllib.parse.quote(recipient_email or '')}?subject={subject_encoded}&body={body_encoded}"
 
                 st.code(email_body_cleaned, language='markdown')
                 st.markdown(f"""
-                    <a href="{gmail_url}" target="_blank">
+                    <a href="{mailto_url}">
                         <button style="padding:10px 20px;background-color:#4CAF50;
                                        color:white;border:none;border-radius:5px;
                                        cursor:pointer;font-size:16px;">

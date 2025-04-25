@@ -1,5 +1,5 @@
 streamlit
-numpy
-pandas
+langchain
 langchain-community
+langchain-groq
 openai

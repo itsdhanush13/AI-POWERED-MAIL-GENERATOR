@@ -1,127 +1,150 @@
 import os
-import streamlit as st
-from langchain_community.document_loaders import WebBaseLoader
+import re
 import urllib.parse
+import streamlit as st
+import fitz  # PyMuPDF
+from langchain_community.document_loaders import WebBaseLoader
 from chains import Chain
 from utils import clean_text, extract_email
 
+
+def extract_info_from_pdf(uploaded_file, llm_chain):
+    if uploaded_file is None:
+        return {}
+
+    text = ""
+    with fitz.open(stream=uploaded_file.read(), filetype="pdf") as doc:
+        for page in doc:
+            text += page.get_text()
+
+    cleaned = clean_text(text)
+
+    try:
+        return llm_chain.extract_resume_fields(cleaned)
+    except Exception as e:
+        st.error(f"AI Resume Parsing Failed: {e}")
+        return {}
+
+
 def front_page():
-    st.set_page_config(layout="wide", page_title="Resume & LinkedIn Submission", page_icon="📝")
-    st.title("📝 Upload Details & LinkedIn Profile")
+    st.set_page_config(layout="centered", page_title="Resume & PDF Autofill", page_icon="📝")
+    st.title("📝 Just Fill And Chill")
 
-    # User name input
-    name = st.text_input("Enter your name:", placeholder="Your full name")
+    # Session flag to track form visibility
+    if "show_form" not in st.session_state:
+        st.session_state["show_form"] = False
 
-    # Qualification input
-    qualification = st.text_input("Enter your qualification:", placeholder="e.g. BCA, MCA, B.Tech")
+    chain = Chain()
+    uploaded_pdf = st.file_uploader("Upload your LinkedIn PDF Resume:", type="pdf")
 
-    # Experience input
-    experience = st.text_input("Enter your experience:", placeholder="e.g. 1 year internship, 6 months project")
+    extracted_data = {}
+    if uploaded_pdf:
+        st.session_state['uploaded_pdf'] = uploaded_pdf
+        extracted_data = extract_info_from_pdf(uploaded_pdf, chain)
+        st.session_state["show_form"] = True  # Automatically show form if resume is uploaded
 
-    # Optional Skills input
-    skills = st.text_input("Enter your skills (comma-separated, optional):", placeholder="e.g. Python, Web Development, AI")
+    if st.button("Manually Fill Details"):
+        st.session_state["show_form"] = True
 
-    # LinkedIn profile link
-    linkedin_link = st.text_input("Enter your LinkedIn Profile Link:")
+    if st.session_state["show_form"]:
+        name = st.text_input("Enter your name:", value=extracted_data.get("name", ""), placeholder="Your full name")
+        qualification = st.text_input("Enter your qualification:", value=extracted_data.get("qualification", ""), placeholder="e.g. BCA, MCA, B.Tech")
+        experience = st.text_input("Enter your experience:", value=extracted_data.get("experience", ""), placeholder="e.g. 1 year internship, 6 months project")
+        skills = st.text_input("Enter your skills (comma-separated, optional):", value=extracted_data.get("skills", ""), placeholder="e.g. Python, Web Development, AI")
 
-    # Resume Drive Link
-    resume_drive_link = st.text_input("Paste your resume Drive link:")
+        if st.button("Submit"):
+            if not name:
+                st.error("Please enter your name.")
+            elif not qualification:
+                st.error("Please enter your qualification.")
+            elif not experience:
+                st.error("Please enter your experience.")
+            else:
+                st.session_state['name'] = name
+                st.session_state['qualification'] = qualification
+                st.session_state['experience'] = experience
+                st.session_state['skills'] = skills
+                st.session_state['email'] = extracted_data.get("email")
+                st.session_state['submitted'] = True
+                st.session_state['page'] = 'main_page'
+                st.rerun()
 
-    if 'submitted' not in st.session_state:
-        st.session_state['submitted'] = False
-
-    if st.button("Submit"):
-        if not name:
-            st.error("Please enter your name.")
-        elif not qualification:
-            st.error("Please enter your qualification.")
-        elif not experience:
-            st.error("Please enter your experience.")
-        elif not linkedin_link:
-            st.error("Please provide your LinkedIn profile link.")
-        elif not resume_drive_link:
-            st.error("Please paste your resume Drive link.")
-        else:
-            # Save inputs in session state
-            st.session_state['name'] = name
-            st.session_state['qualification'] = qualification
-            st.session_state['experience'] = experience
-            st.session_state['skills'] = skills
-            st.session_state['linkedin_link'] = linkedin_link
-            st.session_state['resume_drive_link'] = resume_drive_link
-
-            st.session_state['submitted'] = True
-            st.session_state['page'] = 'main_page'
 
 def create_streamlit_app(llm, clean_text):
-    st.set_page_config(layout="wide", page_title="Cold Email Generator", page_icon="📧")
+    st.set_page_config(layout="centered", page_title="Cold Email Generator", page_icon="📧")
     st.title("📧 AI-POWERED JOB EMAIL ASSISTANT")
 
-    # Retrieve session state variables
     name = st.session_state.get('name', '')
     qualification = st.session_state.get('qualification', '')
     experience = st.session_state.get('experience', '')
     skills = st.session_state.get('skills', '')
-    linkedin_link = st.session_state.get('linkedin_link', '')
-    resume_drive_link = st.session_state.get('resume_drive_link', '')
 
-    if not name or not qualification or not experience or not linkedin_link or not resume_drive_link:
+    if not name or not qualification or not experience:
         st.error("Please go to the front page and provide all your details.")
         if st.button("Go to Front Page"):
             st.session_state['page'] = 'front_page'
         return
 
-    url_input = st.text_input("Enter a URL:", placeholder="Drop a job listing link to generate tailored emails...")
-    submit_button = st.button("Submit")
+    url_input = st.text_input("Paste a job listing URL:", placeholder="e.g. https://company.com/job/software-engineer")
+    submit_button = st.button("Generate Email")
 
     if submit_button:
+        if not url_input or not url_input.startswith("http"):
+            st.error("Please enter a valid job listing URL.")
+            return
+
         try:
             loader = WebBaseLoader([url_input])
-            data = clean_text(loader.load().pop().page_content)
+            raw_content = loader.load()
+            if not raw_content:
+                st.warning("Could not load the job page. Please try another URL.")
+                return
+
+            page_content = raw_content.pop().page_content
+            data = clean_text(page_content)
+
             recipient_email = extract_email(data)
             jobs = llm.extract_jobs(data)
 
-            for job in jobs:
-                email = llm.write_mail(
-                    job=job,
-                    name=name,
-                    qualification=qualification,
-                    experience=experience,
-                    skills=skills
-                )
+            if not jobs:
+                st.warning("No job details were extracted from this page.")
+                return
 
-                email_lines = email.splitlines()
-                subject_line = next((line for line in email_lines if line.lower().startswith("subject:")),
-                                    "Subject: Cold Email from AtliQ")
-                subject = subject_line.replace("Subject:", "").strip()
-                body_lines = [line for line in email_lines if not line.lower().startswith("subject:")]
-                email_body_cleaned = "\n".join(body_lines).strip()
+            job = jobs[0]
+            email = llm.write_mail(
+                job=job,
+                name=name,
+                qualification=qualification,
+                experience=experience,
+                skills=skills
+            )
 
-                gmail_body = (
-                    f"{email_body_cleaned}\n\n"
-                    "📎 Resume:\n"
-                    f"{resume_drive_link}\n\n"
-                    "🔗 LinkedIn:\n"
-                    f"{linkedin_link}"
-                )
+            email_lines = email.splitlines()
+            subject_line = next((line for line in email_lines if line.lower().startswith("subject:")), "Subject: Cold Email")
+            subject = subject_line.replace("Subject:", "").strip()
+            body_lines = [line for line in email_lines if not line.lower().startswith("subject:")]
+            email_body_cleaned = "\n".join(body_lines).strip()
 
-                subject_encoded = urllib.parse.quote(subject)
-                body_encoded = urllib.parse.quote(gmail_body)
-                mailto_url = f"mailto:{urllib.parse.quote(recipient_email or '')}?subject={subject_encoded}&body={body_encoded}"
+            gmail_body = f"{email_body_cleaned}\n\n"
+            subject_encoded = urllib.parse.quote(subject)
+            body_encoded = urllib.parse.quote(gmail_body)
 
-                st.code(email_body_cleaned, language='markdown')
-                st.markdown(f"""
-                    <a href="{mailto_url}">
-                        <button style="padding:10px 20px;background-color:#4CAF50;
-                                       color:white;border:none;border-radius:5px;
-                                       cursor:pointer;font-size:16px;">
-                            📧 Send Email
-                        </button>
-                    </a>
-                """, unsafe_allow_html=True)
+            gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={urllib.parse.quote(recipient_email or '')}&su={subject_encoded}&body={body_encoded}"
+
+            st.code(gmail_body, language='markdown')
+            st.markdown(f"""
+                <a href="{gmail_url}" target="_blank">
+                    <button style="padding:10px 20px;background-color:#4CAF50;
+                                   color:white;border:none;border-radius:5px;
+                                   cursor:pointer;font-size:16px;">
+                        📧 Send Email
+                    </button>
+                </a>
+            """, unsafe_allow_html=True)
 
         except Exception as e:
             st.error(f"An Error Occurred: {e}")
+
 
 if __name__ == "__main__":
     chain = Chain()

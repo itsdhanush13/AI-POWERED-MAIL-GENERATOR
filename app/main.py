@@ -129,7 +129,7 @@ def create_streamlit_app(llm, clean_text):
             subject_encoded = urllib.parse.quote(subject)
             body_encoded = urllib.parse.quote(gmail_body)
 
-            gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={recipient_email}&su={subject}&body={body}"
+            gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to=test@example.com&su=Test%20Subject&body=This%20is%20a%20test%20email."
 
             st.code(gmail_body, language='markdown')
             st.markdown(f"""

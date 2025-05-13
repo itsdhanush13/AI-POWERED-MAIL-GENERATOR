@@ -125,8 +125,11 @@ def create_streamlit_app(llm, clean_text):
             body_lines = [line for line in email_lines if not line.lower().startswith("subject:")]
             email_body_cleaned = "\n".join(body_lines).strip()
 
+            # Define the body variable for clarity
+            body = email_body_cleaned.strip()
+
             # Encode email components
-            gmail_body = f"{email_body_cleaned}\n\n"
+            gmail_body = f"{body}\n\n"
             subject_encoded = urllib.parse.quote(subject)
             body_encoded = urllib.parse.quote(gmail_body)
 

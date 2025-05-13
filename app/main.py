@@ -125,21 +125,35 @@ def create_streamlit_app(llm, clean_text):
             body_lines = [line for line in email_lines if not line.lower().startswith("subject:")]
             email_body_cleaned = "\n".join(body_lines).strip()
 
+            # Encode email components
             gmail_body = f"{email_body_cleaned}\n\n"
             subject_encoded = urllib.parse.quote(subject)
             body_encoded = urllib.parse.quote(gmail_body)
 
-            gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to=test@example.com&su=Test%20Subject&body=This%20is%20a%20test%20email."
+            # Create both mailto and Gmail URLs
+            mailto_url = f"mailto:{recipient_email}?subject={subject_encoded}&body={body_encoded}"
+            gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={urllib.parse.quote(recipient_email or '')}&su={subject_encoded}&body={body_encoded}"
 
             st.code(gmail_body, language='markdown')
+
+            # Display both options for desktop and mobile
             st.markdown(f"""
-                <a href="{gmail_url}" target="_blank">
-                    <button style="padding:10px 20px;background-color:#4CAF50;
-                                   color:white;border:none;border-radius:5px;
-                                   cursor:pointer;font-size:16px;">
-                        📧 Send Email
-                    </button>
-                </a>
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                    <a href="{gmail_url}" target="_blank">
+                        <button style="padding:10px 20px;background-color:#4CAF50;
+                                       color:white;border:none;border-radius:5px;
+                                       cursor:pointer;font-size:16px;">
+                            📧 Send via Gmail Web
+                        </button>
+                    </a>
+                    <a href="{mailto_url}" target="_blank">
+                        <button style="padding:10px 20px;background-color:#2196F3;
+                                       color:white;border:none;border-radius:5px;
+                                       cursor:pointer;font-size:16px;">
+                            📧 Send via Email App (Mobile/Desktop)
+                        </button>
+                    </a>
+                </div>
             """, unsafe_allow_html=True)
 
         except Exception as e:

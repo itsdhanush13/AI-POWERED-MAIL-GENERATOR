@@ -1,5 +1,6 @@
 import os
 import re
+import sqlite3
 import urllib.parse
 import streamlit as st
 import fitz  # PyMuPDF
@@ -8,17 +9,82 @@ from chains import Chain
 from utils import clean_text, extract_email
 
 
+DB_FILE = "user_data.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_info (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            qualification TEXT,
+            experience TEXT,
+            skills TEXT,
+            email TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS email_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_title TEXT,
+            email_content TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def save_user_info(name, qualification, experience, skills, email):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM user_info")
+    cursor.execute(
+        "INSERT INTO user_info (name, qualification, experience, skills, email) VALUES (?, ?, ?, ?, ?)",
+        (name, qualification, experience, skills, email)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user_info():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, qualification, experience, skills, email FROM user_info LIMIT 1")
+    data = cursor.fetchone()
+    conn.close()
+    return data
+
+
+def save_email_to_history(job_title, email_content):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO email_history (job_title, email_content) VALUES (?, ?)",
+        (job_title, email_content)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_email_history():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT job_title, email_content, timestamp FROM email_history ORDER BY timestamp DESC")
+    history = cursor.fetchall()
+    conn.close()
+    return history
+
+
 def extract_info_from_pdf(uploaded_file, llm_chain):
     if uploaded_file is None:
         return {}
-
     text = ""
     with fitz.open(stream=uploaded_file.read(), filetype="pdf") as doc:
         for page in doc:
             text += page.get_text()
-
     cleaned = clean_text(text)
-
     try:
         return llm_chain.extract_resume_fields(cleaned)
     except Exception as e:
@@ -27,149 +93,128 @@ def extract_info_from_pdf(uploaded_file, llm_chain):
 
 
 def front_page():
-    st.set_page_config(layout="centered", page_title="Resume & PDF Autofill", page_icon="📝")
     st.title("📝 Just Fill And Chill")
-
-    # Session flag to track form visibility
-    if "show_form" not in st.session_state:
-        st.session_state["show_form"] = False
 
     chain = Chain()
     uploaded_pdf = st.file_uploader("Upload your LinkedIn PDF Resume:", type="pdf")
 
     extracted_data = {}
     if uploaded_pdf:
-        st.session_state['uploaded_pdf'] = uploaded_pdf
         extracted_data = extract_info_from_pdf(uploaded_pdf, chain)
-        st.session_state["show_form"] = True  # Automatically show form if resume is uploaded
+        st.session_state["show_form"] = True
 
     if st.button("Manually Fill Details"):
         st.session_state["show_form"] = True
 
-    if st.session_state["show_form"]:
-        name = st.text_input("Enter your name:", value=extracted_data.get("name", ""), placeholder="Your full name")
-        qualification = st.text_input("Enter your qualification:", value=extracted_data.get("qualification", ""), placeholder="e.g. BCA, MCA, B.Tech")
-        experience = st.text_input("Enter your experience:", value=extracted_data.get("experience", ""), placeholder="e.g. 1 year internship, 6 months project")
-        skills = st.text_input("Enter your skills (comma-separated, optional):", value=extracted_data.get("skills", ""), placeholder="e.g. Python, Web Development, AI")
+    if st.session_state.get("show_form", False):
+        name = st.text_input("Enter your name:", value=extracted_data.get("name", ""))
+        qualification = st.text_input("Enter your qualification:", value=extracted_data.get("qualification", ""))
+        experience = st.text_input("Enter your experience:", value=extracted_data.get("experience", ""))
+        skills = st.text_input("Enter your skills (comma-separated):", value=extracted_data.get("skills", ""))
 
         if st.button("Submit"):
-            if not name:
-                st.error("Please enter your name.")
-            elif not qualification:
-                st.error("Please enter your qualification.")
-            elif not experience:
-                st.error("Please enter your experience.")
+            if not name or not qualification or not experience:
+                st.error("Please fill in all required fields.")
             else:
-                st.session_state['name'] = name
-                st.session_state['qualification'] = qualification
-                st.session_state['experience'] = experience
-                st.session_state['skills'] = skills
-                st.session_state['email'] = extracted_data.get("email")
-                st.session_state['submitted'] = True
-                st.session_state['page'] = 'main_page'
+                email = extracted_data.get("email", "")
+                save_user_info(name, qualification, experience, skills, email)
+                st.session_state["page"] = "main_page"
                 st.rerun()
 
 
 def create_streamlit_app(llm, clean_text):
-    st.set_page_config(layout="centered", page_title="Cold Email Generator", page_icon="📧")
-    st.title("📧 AI-POWERED JOB EMAIL ASSISTANT")
+    st.title("📧 AI-Powered Job Email Assistant")
 
-    name = st.session_state.get('name', '')
-    qualification = st.session_state.get('qualification', '')
-    experience = st.session_state.get('experience', '')
-    skills = st.session_state.get('skills', '')
-
-    if not name or not qualification or not experience:
-        st.error("Please go to the front page and provide all your details.")
+    user_info = get_user_info()
+    if not user_info:
+        st.error("No user data found. Please fill out your profile.")
         if st.button("Go to Front Page"):
-            st.session_state['page'] = 'front_page'
+            st.session_state["page"] = "front_page"
         return
 
-    url_input = st.text_input("Paste a job listing URL:", placeholder="e.g. https://company.com/job/software-engineer")
-    submit_button = st.button("Generate Email")
+    name, qualification, experience, skills, email = user_info
 
-    if submit_button:
-        if not url_input or not url_input.startswith("http"):
-            st.error("Please enter a valid job listing URL.")
+    # Menu Bar
+    menu = st.columns(3)
+    if menu[0].button("📂 View History"):
+        st.session_state["viewing_history"] = True
+    if menu[1].button("📝 Edit Profile"):
+        st.session_state["page"] = "front_page"
+        st.rerun()
+    if menu[2].button("🔄 Logout"):
+        os.remove(DB_FILE)  # Clear DB
+        st.session_state.clear()
+        st.rerun()
+
+    if st.session_state.get("viewing_history", False):
+        st.subheader("📂 Email History")
+        history = get_email_history()
+        if not history:
+            st.info("No past emails found.")
+        for job_title, email_content, timestamp in history:
+            st.markdown(f"**{job_title}** — _{timestamp}_")
+            st.code(email_content, language="markdown")
+        if st.button("Back to Email Generator"):
+            st.session_state["viewing_history"] = False
+        return
+
+    url_input = st.text_input("Paste a job listing URL:")
+    if st.button("Generate Email"):
+        if not url_input.startswith("http"):
+            st.error("Please enter a valid URL.")
             return
-
         try:
             loader = WebBaseLoader([url_input])
             raw_content = loader.load()
-            if not raw_content:
-                st.warning("Could not load the job page. Please try another URL.")
-                return
-
             page_content = raw_content.pop().page_content
             data = clean_text(page_content)
-
             recipient_email = extract_email(data)
             jobs = llm.extract_jobs(data)
-
             if not jobs:
-                st.warning("No job details were extracted from this page.")
+                st.warning("No job found on the page.")
                 return
-
             job = jobs[0]
-            email = llm.write_mail(
-                job=job,
-                name=name,
-                qualification=qualification,
-                experience=experience,
-                skills=skills
-            )
+            email_text = llm.write_mail(job, name, qualification, experience, skills)
 
-            email_lines = email.splitlines()
-            subject_line = next((line for line in email_lines if line.lower().startswith("subject:")), "Subject: Cold Email")
+            subject_line = next((line for line in email_text.splitlines() if line.lower().startswith("subject:")), "Subject: Cold Email")
             subject = subject_line.replace("Subject:", "").strip()
-            body_lines = [line for line in email_lines if not line.lower().startswith("subject:")]
-            email_body_cleaned = "\n".join(body_lines).strip()
+            email_body = "\n".join([line for line in email_text.splitlines() if not line.lower().startswith("subject:")])
 
-            # Define the body variable for clarity
-            body = email_body_cleaned.strip()
-
-            # Encode email components
-            gmail_body = f"{body}\n\n"
+            body_encoded = urllib.parse.quote(email_body)
             subject_encoded = urllib.parse.quote(subject)
-            body_encoded = urllib.parse.quote(gmail_body)
 
-            # Create both mailto and Gmail URLs
             mailto_url = f"mailto:{recipient_email}?subject={subject_encoded}&body={body_encoded}"
             gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={urllib.parse.quote(recipient_email or '')}&su={subject_encoded}&body={body_encoded}"
 
-            st.code(gmail_body, language='markdown')
+            save_email_to_history(job["role"], email_text)
 
-            # Display both options for desktop and mobile
+            st.code(email_text, language="markdown")
             st.markdown(f"""
                 <div style="display:flex;flex-direction:column;gap:10px;">
                     <a href="{gmail_url}" target="_blank">
-                        <button style="padding:10px 20px;background-color:#4CAF50;
-                                       color:white;border:none;border-radius:5px;
-                                       cursor:pointer;font-size:16px;">
-                            📧 Send via Gmail Web
-                        </button>
+                        <button style="padding:10px 20px;background-color:#4CAF50;color:white;border:none;border-radius:5px;">📧 Send via Gmail</button>
                     </a>
                     <a href="{mailto_url}" target="_blank">
-                        <button style="padding:10px 20px;background-color:#2196F3;
-                                       color:white;border:none;border-radius:5px;
-                                       cursor:pointer;font-size:16px;">
-                            📧 Send via Email App (Mobile/Desktop)
-                        </button>
+                        <button style="padding:10px 20px;background-color:#2196F3;color:white;border:none;border-radius:5px;">📧 Send via Email App</button>
                     </a>
                 </div>
             """, unsafe_allow_html=True)
 
         except Exception as e:
-            st.error(f"An Error Occurred: {e}")
+            st.error(f"Error: {e}")
 
 
 if __name__ == "__main__":
-    chain = Chain()
+    init_db()
+    st.set_page_config(layout="centered", page_title="Job Email Generator", page_icon="📧")
 
-    if 'page' not in st.session_state:
-        st.session_state['page'] = 'front_page'
+    if "page" not in st.session_state:
+        if get_user_info():
+            st.session_state["page"] = "main_page"
+        else:
+            st.session_state["page"] = "front_page"
 
-    if st.session_state['page'] == 'front_page':
+    if st.session_state["page"] == "front_page":
         front_page()
-    elif st.session_state['page'] == 'main_page':
-        create_streamlit_app(chain, clean_text)
+    elif st.session_state["page"] == "main_page":
+        create_streamlit_app(Chain(), clean_text)
